@@ -61,12 +61,12 @@ def get_horse_past_features(horse_id: str, current_race_id: str) -> dict:
         time.sleep(1.0)
         
         response = requests.get(url, headers=headers, timeout=10)
-        response.encoding = 'euc-jp'
+        response.encoding = 'EUC-JP'
         
         if response.status_code != 200:
             raise ValueError(f"HTTP Error {response.status_code}")
             
-        soup = BeautifulSoup(response.text, 'html.parser')
+        soup = BeautifulSoup(response.content, 'html.parser', from_encoding='EUC-JP')
         
         # 馬の過去走成績テーブルを検索 (db_h_race_results クラスを検索)
         table = soup.find('table', class_=lambda x: x and 'db_h_race_results' in x)
@@ -249,7 +249,7 @@ def get_jockey_stats(jockey_id: str) -> dict:
         res = requests.get(url, headers=headers, timeout=10)
         res.encoding = 'EUC-JP'
         if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
+            soup = BeautifulSoup(res.content, 'html.parser', from_encoding='EUC-JP')
             tables = soup.find_all('table')
             for idx, t in enumerate(tables):
                 dfs = pd.read_html(StringIO(str(t)))
@@ -306,7 +306,7 @@ def get_trainer_stats(trainer_id: str) -> dict:
         res = requests.get(url, headers=headers, timeout=10)
         res.encoding = 'EUC-JP'
         if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
+            soup = BeautifulSoup(res.content, 'html.parser', from_encoding='EUC-JP')
             tables = soup.find_all('table')
             for idx, t in enumerate(tables):
                 dfs = pd.read_html(StringIO(str(t)))
