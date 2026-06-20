@@ -22,6 +22,14 @@ def train_lightgbm_model(csv_path: str, model_save_path: str = "horse_racing_mod
     # 1. データの読み込みと前処理
     df_raw = pd.read_csv(csv_path)
     
+    # 重複列の発生防止：既存のスクレイピング由来の特徴量列があれば削除しておく
+    cols_to_clean = [
+        'prev_rank', 'avg_up_3f_3runs', 'win_rate', 'prev_class',
+        'jockey_win_rate', 'jockey_place_rate',
+        'trainer_win_rate', 'trainer_place_rate'
+    ]
+    df_raw = df_raw.drop(columns=[c for c in cols_to_clean if c in df_raw.columns], errors='ignore')
+    
     # 過去実績特徴量の動的取得 (馬IDごとに get_horse_past_features を呼び出し)
     # サーバー負荷防止のため1秒ディレイを挟みつつユニークな馬IDのデータを収集
     if '馬ID' in df_raw.columns:
@@ -105,6 +113,10 @@ def train_lightgbm_model(csv_path: str, model_save_path: str = "horse_racing_mod
         print("[SUCCESS] Trainer stats mapping completed!")
         
     df_processed = preprocess_data(df_raw)
+    
+    # 収集・統合したデータ(df_raw)をCSVファイルに上書き保存（文字化け防止のため utf-8-sig を指定）
+    print(f"[INFO] Saving collected and integrated data to: {csv_path}")
+    df_raw.to_csv(csv_path, index=False, encoding='utf-8-sig')
     
     # 特徴量 (X) と 目的変数 (y) の定義
     # 'race_id' と 'is_win' 以外のすべての列を特徴量とする

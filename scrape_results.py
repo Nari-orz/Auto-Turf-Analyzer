@@ -22,7 +22,7 @@ def scrape_race_results(race_id: str) -> pd.DataFrame:
             print(f"[Warning] Failed to fetch {race_id}. Status code: {response.status_code}")
             return pd.DataFrame()
             
-        soup = BeautifulSoup(response.text, 'html.parser')
+        soup = BeautifulSoup(response.content, 'html.parser', from_encoding='EUC-JP')
         
         # db.netkeiba.com の結果テーブルは通常 class='race_table_01'
         table = soup.find('table', class_='race_table_01')
@@ -178,10 +178,18 @@ def main():
         final_df = final_df.rename(columns={'単勝': '単勝オッズ'})
         
         output_file = "race_data_test.csv"
-        # WindowsのExcel等で開いた際の文字化けを防ぐため utf-8-sig を指定
-        final_df.to_csv(output_file, index=False, encoding='utf-8-sig')
-        print("[SUCCESS] スクレイピング完了！")
-        print(f"結合データを '{output_file}' として保存しました。(総行数: {len(final_df)}行)")
+        import os
+        file_exists = os.path.exists(output_file)
+        
+        # 既存のCSVファイルがある場合はヘッダーなしで追記（append）、ない場合は新規作成（write）
+        if file_exists:
+            final_df.to_csv(output_file, mode='a', index=False, header=False, encoding='utf-8-sig')
+            print("[SUCCESS] スクレイピング完了！")
+            print(f"既存の '{output_file}' に {len(final_df)}行を追記しました。")
+        else:
+            final_df.to_csv(output_file, mode='w', index=False, header=True, encoding='utf-8-sig')
+            print("[SUCCESS] スクレイピング完了！")
+            print(f"新規に '{output_file}' を作成し、{len(final_df)}行を保存しました。")
     else:
         print("[FAILED] スクレイピング結果が空だったため、CSVの保存を行いませんでした。")
 
