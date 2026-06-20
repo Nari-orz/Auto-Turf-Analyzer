@@ -33,14 +33,14 @@ def fetch_netkeiba_results(race_id: str) -> pd.DataFrame:
     
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        # 文字コードを「euc-jp」に指定して文字化けを防止
-        response.encoding = 'euc-jp'
+        # 文字コードを「EUC-JP」に指定して文字化けを防止
+        response.encoding = 'EUC-JP'
         
         if response.status_code != 200:
             st.session_state.last_error = f"HTTP Error {response.status_code}: ページの取得に失敗しました。\nURL: {url}"
             return pd.DataFrame()
             
-        soup = BeautifulSoup(response.text, 'html.parser')
+        soup = BeautifulSoup(response.content, 'html.parser', from_encoding='EUC-JP')
         
         # class="race_table_01" が指定された table タグを検索
         table = soup.find('table', class_='race_table_01')
@@ -195,13 +195,13 @@ def fetch_netkeiba_shutuba(race_id: str) -> pd.DataFrame:
     
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        response.encoding = 'euc-jp' # netkeibaは通常 euc-jp (文字化け防止)
+        response.encoding = 'utf-8' # race.netkeiba.comはutf-8 (文字化け防止)
         
         if response.status_code != 200:
             st.session_state.last_error = f"HTTP Error {response.status_code}: 出馬表の取得に失敗しました。\nURL: {url}"
             return pd.DataFrame()
             
-        soup = BeautifulSoup(response.text, 'html.parser')
+        soup = BeautifulSoup(response.content, 'html.parser', from_encoding='utf-8')
         
         table = soup.find('table', class_=lambda x: x and 'shutuba_table' in x)
         if not table:
@@ -508,6 +508,9 @@ st.markdown("""
 if "prediction_started" not in st.session_state:
     st.session_state.prediction_started = False
 
+if "scraped_data_list" not in st.session_state:
+    st.session_state.scraped_data_list = []
+
 # Sidebar Setup
 st.sidebar.markdown('<div class="sidebar-header">🏇 ANALYZER SETTINGS</div>', unsafe_allow_html=True)
 
@@ -613,11 +616,115 @@ if not st.session_state.prediction_started:
 
     with tab_train:
         st.markdown("### 🤖 LightGBMによる「1着確率（is_win）」予測モデルの構築")
+        
+        # --- データ収集セクション ---
+        st.markdown("#### 📡 過去データのスクレイピング・一時保存")
+        st.write("netkeibaのデータベースから過去のレース結果データを取得し、一時保存リストに追加します。")
+        
+        scrape_btn = st.button("📥 最新の過去レース結果を収集・一時保存する", use_container_width=True)
+        if scrape_btn:
+            if not race_id or len(race_id) != 12 or not race_id.isdigit():
+                st.error("❌ 有効な12桁のJRAレースIDをサイドバーに入力してください。")
+            else:
+                with st.spinner(f"⏳ レースID {race_id} のデータを収集中です…（数分かかります）"):
+                    try:
+                        # サーバーへのアクセス制限（マナー）を考慮したスクレイピング処理
+                        from scrape_results import scrape_race_results
+                        df_new = scrape_race_results(race_id)
+                        
+                        if df_new is not None and not df_new.empty:
+                            # 列名を「単勝」から「単勝オッズ」に統一
+                            df_new = df_new.rename(columns={'単勝': '単勝オッズ'})
+                            
+                            # 1. 一時保存リスト内での重複チェック
+                            already_in_temp = False
+                            for temp_df in st.session_state.scraped_data_list:
+                                if 'race_id' in temp_df.columns:
+                                    if str(race_id) in temp_df['race_id'].astype(str).unique():
+                                        already_in_temp = True
+                                        break
+                                        
+                            # 2. 既存のCSVファイル内での重複チェック
+                            already_in_csv = False
+                            csv_path_data = "race_data_test.csv"
+                            file_exists = os.path.exists(csv_path_data)
+                            if file_exists:
+                                try:
+                                    df_existing = pd.read_csv(csv_path_data)
+                                    if 'race_id' in df_existing.columns:
+                                        existing_ids = df_existing['race_id'].astype(str).unique()
+                                        if str(race_id) in existing_ids:
+                                            already_in_csv = True
+                                except Exception:
+                                    pass
+                                    
+                            if already_in_temp:
+                                st.warning(f"⚠️ レースID {race_id} のデータはすでに一時保存リストに含まれています。")
+                            elif already_in_csv:
+                                st.warning(f"⚠️ レースID {race_id} のデータはすでに CSV ファイルに登録されています。")
+                            else:
+                                # 一時リストに追加
+                                st.session_state.scraped_data_list.append(df_new)
+                                st.success(f"📥 レースID {race_id} のデータを一時保存リストに追加しました (取得頭数: {len(df_new)}頭)")
+                        else:
+                            st.warning(f"⚠️ 指定されたレースID {race_id} の結果を取得できませんでした。レースIDが正しいか、またはすでに終了している過去レースか確認してください。")
+                            
+                    except Exception as scrape_err:
+                        st.error(f"❌ データ収集中にエラーが発生しました: {scrape_err}")
+                        import traceback
+                        st.code(traceback.format_exc())
+                        
+        # --- 一時保存データのプレビュー・一括保存セクション ---
+        if len(st.session_state.scraped_data_list) > 0:
+            st.markdown("---")
+            st.markdown("#### 📁 一時保存中のデータ一覧")
+            
+            # 全一時保存データを結合
+            df_temp_all = pd.concat(st.session_state.scraped_data_list, ignore_index=True)
+            unique_temp_races = df_temp_all['race_id'].unique()
+            
+            st.info(f"現在、**{len(unique_temp_races)} レース**（合計 **{len(df_temp_all)} 頭**）のデータが一時保存されています。")
+            
+            # プレビュー表示（一部の列を表示）
+            preview_cols = [c for c in ['race_id', '着順', '馬番', '馬名', '単勝オッズ', '人気', 'タイム', '馬体重'] if c in df_temp_all.columns]
+            st.dataframe(df_temp_all[preview_cols], use_container_width=True)
+            
+            col_save, col_clear = st.columns([2, 1])
+            with col_save:
+                save_all_btn = st.button("💾 一時保存した全データをまとめてCSVに保存する", use_container_width=True)
+                if save_all_btn:
+                    csv_path_data = "race_data_test.csv"
+                    file_exists = os.path.exists(csv_path_data)
+                    
+                    try:
+                        if file_exists:
+                            df_temp_all.to_csv(csv_path_data, mode='a', index=False, header=False, encoding='utf-8-sig')
+                        else:
+                            df_temp_all.to_csv(csv_path_data, mode='w', index=False, header=True, encoding='utf-8-sig')
+                        
+                        st.success("✅ CSVへの追記が完了しました")
+                        # リストを空にして画面を更新
+                        st.session_state.scraped_data_list = []
+                        st.rerun()
+                    except Exception as save_err:
+                        st.error(f"❌ CSVの保存中にエラーが発生しました: {save_err}")
+                        
+            with col_clear:
+                clear_btn = st.button("🗑️ 一時保存データをクリア", use_container_width=True)
+                if clear_btn:
+                    st.session_state.scraped_data_list = []
+                    st.success("一時保存データを削除しました。")
+                    st.rerun()
+                    
+        st.markdown("---")
+        
+        # --- モデル学習セクション ---
+        st.markdown("#### 🧠 AIモデルの学習・評価")
         st.write("スクレイピングされた過去のレースデータ（`race_data_test.csv`）を用いて、LightGBM分類器（LGBMClassifier）による学習を実行します。")
         
         csv_path = "race_data_test.csv"
         if not os.path.exists(csv_path):
-            st.warning("⚠️ 学習データ `race_data_test.csv` がまだ用意されていません。先にスクレイピングスクリプト等でデータを取得してください。")
+            st.warning("⚠️ 学習データ `race_data_test.csv` がまだ用意されていません。上のボタンから過去レース結果を収集・更新してください。")
         else:
             train_btn = st.button("🚀 LightGBMモデルの学習を開始する", use_container_width=True)
             
@@ -831,7 +938,10 @@ else:
             if '馬番' in df_merged.columns:
                 debug_df.insert(1, '馬番', df_merged['馬番'])
             print("\n--- [DEBUG] 推論用データフレーム (X_pred) ---")
-            print(debug_df.to_string())
+            try:
+                print(debug_df.to_string())
+            except UnicodeEncodeError:
+                print(debug_df.to_string().encode('cp932', errors='replace').decode('cp932'))
             print("-------------------------------------------\n")
             
             # UIデバッグ用にセッション状態に保存
@@ -846,7 +956,8 @@ else:
             for idx, prob in enumerate(probs):
                 h_name = df_merged.iloc[idx]['馬名'] if '馬名' in df_merged.columns else f"Index {idx}"
                 h_num = df_merged.iloc[idx]['馬番'] if '馬番' in df_merged.columns else f"{idx}"
-                print(f"馬番 {h_num} | 馬名: {h_name} -> 確率: {prob:.4f}")
+                safe_h_name = str(h_name).encode('cp932', errors='replace').decode('cp932')
+                print(f"馬番 {h_num} | 馬名: {safe_h_name} -> 確率: {prob:.4f}")
             print("-------------------------------\n")
             
             # 合計が 100% になるように調整（相対予測勝率）
